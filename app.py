@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Header, HTTPException, Response
+from fastapi import FastAPI, Header, HTTPException, Response, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -9,9 +9,18 @@ import base64
 app = FastAPI()
 
 # -----------------------------
+# Root endpoint
+# -----------------------------
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "service": "orders-api"
+    }
+
+# -----------------------------
 # Enable CORS
 # -----------------------------
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -21,9 +30,8 @@ app.add_middleware(
 )
 
 # -----------------------------
-# Assignment Values
+# Assignment Constants
 # -----------------------------
-
 TOTAL_ORDERS = 54
 RATE_LIMIT = 15
 WINDOW_SECONDS = 10
@@ -31,7 +39,6 @@ WINDOW_SECONDS = 10
 # -----------------------------
 # In-memory stores
 # -----------------------------
-
 idempotency_store = {}
 client_requests = {}
 
@@ -46,40 +53,31 @@ orders = [
 # -----------------------------
 # Request Model
 # -----------------------------
-
 class OrderRequest(BaseModel):
-    item: str
-
+    item: Optional[str] = "Sample Item"
 
 # -----------------------------
-# Cursor Helpers
+# Cursor helpers
 # -----------------------------
-
-def encode_cursor(index: int):
+def encode_cursor(index: int) -> str:
     return base64.urlsafe_b64encode(str(index).encode()).decode()
 
-
-def decode_cursor(cursor: str):
+def decode_cursor(cursor: str) -> int:
     try:
         return int(base64.urlsafe_b64decode(cursor.encode()).decode())
     except Exception:
         return 0
 
-
 # -----------------------------
 # Rate Limiter
 # -----------------------------
-
 def check_rate_limit(client_id: str):
 
     now = time.time()
 
     timestamps = client_requests.get(client_id, [])
 
-    timestamps = [
-        t for t in timestamps
-        if now - t < WINDOW_SECONDS
-    ]
+    timestamps = [t for t in timestamps if now - t < WINDOW_SECONDS]
 
     if len(timestamps) >= RATE_LIMIT:
 
@@ -90,24 +88,22 @@ def check_rate_limit(client_id: str):
             detail="Rate limit exceeded",
             headers={
                 "Retry-After": str(retry_after)
-            }
+            },
         )
 
     timestamps.append(now)
 
     client_requests[client_id] = timestamps
 
-
 # -----------------------------
 # POST /orders
 # -----------------------------
-
 @app.post("/orders")
 def create_order(
-    order: OrderRequest,
     response: Response,
     idempotency_key: str = Header(..., alias="Idempotency-Key"),
-    client_id: str = Header("default", alias="X-Client-Id")
+    client_id: str = Header("default", alias="X-Client-Id"),
+    order: Optional[OrderRequest] = Body(default=None),
 ):
 
     check_rate_limit(client_id)
@@ -117,25 +113,28 @@ def create_order(
 
     response.status_code = 201
 
+    item = "Sample Item"
+
+    if order is not None and order.item:
+        item = order.item
+
     new_order = {
         "id": str(uuid.uuid4()),
-        "item": order.item
+        "item": item,
     }
 
     idempotency_store[idempotency_key] = new_order
 
     return new_order
 
-
 # -----------------------------
 # GET /orders
 # -----------------------------
-
 @app.get("/orders")
 def get_orders(
     limit: int = 10,
     cursor: Optional[str] = None,
-    client_id: str = Header("default", alias="X-Client-Id")
+    client_id: str = Header("default", alias="X-Client-Id"),
 ):
 
     check_rate_limit(client_id)
